@@ -1,0 +1,9 @@
+FROM python:3.12.1
+
+WORKDIR /app
+
+COPY . . # Копируем все файлы в образ
+
+RUN pip3 install requests # Устанавливаем requests
+
+CMD ["python3", "insult.py"] # Команда запуска программы
