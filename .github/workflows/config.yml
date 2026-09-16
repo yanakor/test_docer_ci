@@ -1,0 +1,122 @@
+# GitHub Actions Workflow — запуск UI-тестов Playwright с генерацией Allure-отчётов
+# и публикацией их на GitHub Pages (ветка gh-pages)
+#
+# Триггеры:
+#   1. Ручной запуск (workflow_dispatch) — с выбором браузера, маркера и потоков
+#   2. Создание/обновление Pull Request в main — автозапуск тестов
+#   3. Пуш в main при изменении тестов или workflow-файлов
+#   4. По расписанию — каждый будний день в 05:00 UTC
+
+name: UI Tests with Allure
+
+on:
+  # ВАРИАНТ 1 — Ручной запуск через UI GitHub Actions
+  workflow_dispatch:
+    inputs:
+      BROWSER:
+        description: 'Браузер для запуска тестов (chromium, firefox, webkit)'
+        required: true
+        default: 'chromium'
+      MARKER:
+        description: 'Pytest-маркер для фильтрации тестов (smoke, regression и т.д.)'
+        required: true
+        default: 'smoke'
+      THREADS:
+        description: 'Количество потоков для параллельного запуска'
+        required: true
+        default: '1'
+
+  # ВАРИАНТ 2 — Запуск по расписанию (каждый будний день в 05:00 UTC)
+  schedule:
+    - cron: '0 5 * * 1-5'
+
+  # ВАРИАНТ 3 — Автозапуск при пуше в main (только если изменились тесты или workflow)
+  push:
+    branches:
+      - main
+    paths:
+      - 'tests/**'
+      - '.github/workflows/**'
+
+  # ВАРИАНТ 4 — Запуск при создании/обновлении Pull Request в main
+  pull_request:
+    branches:
+      - main
+
+# Права для деплоя на GitHub Pages
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  ui-tests:
+    runs-on: ubuntu-latest
+    # Окружение выбирается из входного параметра при ручном запуске
+    environment: ${{ inputs.ENV }}
+
+    steps:
+      # Шаг 1 — Получаем код репозитория
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Шаг 2 — Клонируем ветку gh-pages для доступа к истории предыдущих прогонов
+      # История Allure позволяет видеть тренды тестов между запусками
+      - name: Checkout gh-pages for Allure history
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages-branch
+
+      # Шаг 3 — Подготавливаем окружение Allure
+      # Записываем метаданные (ветка, коммит, браузер) в environment.properties
+      - name: Prepare Allure environment
+        run: |
+          mkdir -p allure-results
+          echo "Branch=${{ github.ref_name }}" > allure-results/environment.properties
+          echo "Commit=${{ github.sha }}" >> allure-results/environment.properties
+          echo "Browser=${{ inputs.BROWSER || 'chromium' }}" >> allure-results/environment.properties
+
+      # Шаг 4 — Копируем историю предыдущих прогонов из gh-pages
+      # Это позволяет Allure отображать тренды и историю тестов
+      - name: Copy Allure history from gh-pages
+        run: |
+          mkdir -p allure-results/history
+          if [ -d "gh-pages-branch/history" ]; then
+            cp -R gh-pages-branch/history/* allure-results/history/
+          fi
+
+      # Шаг 5 — Запуск тестов через docker-compose
+      # Передаём переменные окружения: браузер и маркер
+      - name: Run tests via docker-compose
+        env:
+          BROWSER: ${{ inputs.BROWSER || 'chromium' }}
+          MARKER: ${{ inputs.MARKER || 'smoke' }}
+          THREADS: ${{ inputs.THREADS || '1' }}
+        run: docker compose up --exit-code-from tests tests
+
+      # Шаг 6 — Генерация HTML-отчёта Allure из сырых результатов
+      - name: Generate Allure report
+        env:
+          BROWSER: ${{ inputs.BROWSER || 'chromium' }}
+        run: docker compose up report
+
+      # Шаг 7 — Деплой Allure-отчёта на GitHub Pages (ветка gh-pages)
+      # Отчёт публикуется в папку history для сохранения истории между прогонами
+      - name: Deploy Allure report to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          token: ${{ secrets.CI_TOKEN }}
+          branch: gh-pages
+          folder: allure-report
+          target-folder: history
+          clean: false
+
+      # Шаг 8 — Загрузка артефакта с сырыми результатами Allure (на случай, если нужен для отладки)
+      - name: Upload Allure results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: allure-results/
+          retention-days: 14
