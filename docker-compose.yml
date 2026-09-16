@@ -24,15 +24,14 @@ services:
 
   # Сервис "report" — генерация HTML-отчёта Allure из сырых результатов
   # Используется после запуска тестов: docker compose up report
+  # Образ "allure-framework/allure" содержит только CLI allure и генерирует отчёт за один запуск
   report:
-    image: frankescobar/allure-docker-service:latest
-    container_name: allure-report
+    image: andyzt/allure:2.19.0
+    container_name: allure-report-gen
     volumes:
-      # Монтируем папку с результатами тестов для генерации отчёта
-      - ./allure-results:/app/allure-results
-      # Монтируем папку куда будет сохранён готовый HTML-отчёт
-      - ./allure-report:/app/default-results
-    entrypoint: ""
-    # Генерируем отчёт и сразу завершаем работу контейнера
-    command: >
-      sh -c "allure generate /app/allure-results --clean -o /app/default-results"
+      # Монтируем папку с сырыми результатами тестов (внутри контейнера: /input)
+      - ./allure-results:/input
+      # Монтируем папку куда будет сохранён готовый HTML-отчёт (внутри контейнера: /output)
+      - ./allure-report:/output
+    # Генерируем отчёт из /input в /output, --clean очищает выходную папку перед генерацией
+    command: ["generate", "/input", "--clean", "-o", "/output"]
