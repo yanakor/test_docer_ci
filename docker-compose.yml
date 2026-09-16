@@ -1,0 +1,38 @@
+# Docker Compose конфигурация для запуска Playwright-тестов и генерации Allure-отчётов
+# 
+# Запуск тестов:
+#   docker compose up tests
+# Запуск генерации отчёта:
+#   docker compose up report
+# С параметрами:
+#   BROWSER=firefox MARKER=smoke docker compose up tests
+
+services:
+  # Сервис "tests" — сборка образа и запуск pytest-тестов
+  tests:
+    build: .                          # Собираем образ из Dockerfile в текущей директории
+    container_name: playwright-tests  # Имя контейнера
+    environment:
+      # Переменные окружения с значениями по умолчанию (через синтаксис ${VAR:-default})
+      # Можно переопределять при запуске: BROWSER=firefox docker compose up tests
+      - BROWSER=${BROWSER:-chromium}  # Браузер: chromium, firefox или webkit
+      - MARKER=${MARKER:-smoke}       # pytest-маркер для фильтрации тестов
+      - THREADS=${THREADS:-1}         # Количество потоков для параллельного выполнения
+    volumes:
+      # Проброс папки: результаты Allure сохраняются на хост, а не только в контейнере
+      - ./allure-results:/usr/workspace/allure-results
+
+  # Сервис "report" — генерация HTML-отчёта Allure из сырых результатов
+  # Используется после запуска тестов: docker compose up report
+  report:
+    image: frankescobar/allure-docker-service:latest
+    container_name: allure-report
+    volumes:
+      # Монтируем папку с результатами тестов для генерации отчёта
+      - ./allure-results:/app/allure-results
+      # Монтируем папку куда будет сохранён готовый HTML-отчёт
+      - ./allure-report:/app/default-results
+    entrypoint: ""
+    # Генерируем отчёт и сразу завершаем работу контейнера
+    command: >
+      sh -c "allure generate /app/allure-results --clean -o /app/default-results"
