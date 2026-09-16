@@ -52,58 +52,62 @@ permissions:
 jobs:
   ui-tests:
     runs-on: ubuntu-latest
-    # Окружение выбирается из входного параметра при ручном запуске
-    environment: ${{ inputs.ENV }}
 
     steps:
       # Шаг 1 — Получаем код репозитория
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Шаг 2 — Клонируем ветку gh-pages для доступа к истории предыдущих прогонов
-      # История Allure позволяет видеть тренды тестов между запусками
+      # Шаг 2 — Проверяем существование ветки gh-pages и копируем историю Allure
+      # continue-on-error: true — если ветки gh-pages ещё нет, шаг не падает
       - name: Checkout gh-pages for Allure history
+        id: checkout_gh_pages
         uses: actions/checkout@v4
         with:
           ref: gh-pages
           path: gh-pages-branch
+        continue-on-error: true
 
       # Шаг 3 — Подготавливаем окружение Allure
       # Записываем метаданные (ветка, коммит, браузер) в environment.properties
+      # Используем github.event.inputs для ручного запуска и fallback для push/PR
       - name: Prepare Allure environment
         run: |
           mkdir -p allure-results
           echo "Branch=${{ github.ref_name }}" > allure-results/environment.properties
           echo "Commit=${{ github.sha }}" >> allure-results/environment.properties
-          echo "Browser=${{ inputs.BROWSER || 'chromium' }}" >> allure-results/environment.properties
+          echo "Browser=${{ github.event.inputs.BROWSER || 'chromium' }}" >> allure-results/environment.properties
 
       # Шаг 4 — Копируем историю предыдущих прогонов из gh-pages
-      # Это позволяет Allure отображать тренды и историю тестов
+      # Проверяем, что шаг 2 прошёл успешно и папка существует
       - name: Copy Allure history from gh-pages
         run: |
           mkdir -p allure-results/history
           if [ -d "gh-pages-branch/history" ]; then
-            cp -R gh-pages-branch/history/* allure-results/history/
+            cp -R gh-pages-branch/history/* allure-results/history/ || true
           fi
 
       # Шаг 5 — Запуск тестов через docker-compose
-      # Передаём переменные окружения: браузер и маркер
+      # --exit-code-from tests — код возврата workflow зависит от результата тестов
+      # Используем github.event.inputs.* с fallback на значения по умолчанию
       - name: Run tests via docker-compose
         env:
-          BROWSER: ${{ inputs.BROWSER || 'chromium' }}
-          MARKER: ${{ inputs.MARKER || 'smoke' }}
-          THREADS: ${{ inputs.THREADS || '1' }}
+          BROWSER: ${{ github.event.inputs.BROWSER || 'chromium' }}
+          MARKER: ${{ github.event.inputs.MARKER || 'smoke' }}
+          THREADS: ${{ github.event.inputs.THREADS || '1' }}
         run: docker compose up --exit-code-from tests tests
 
       # Шаг 6 — Генерация HTML-отчёта Allure из сырых результатов
+      # Сервис "report" (образ andyzt/allure) генерирует отчёт в папку allure-report
       - name: Generate Allure report
-        env:
-          BROWSER: ${{ inputs.BROWSER || 'chromium' }}
+        if: always()
         run: docker compose up report
 
       # Шаг 7 — Деплой Allure-отчёта на GitHub Pages (ветка gh-pages)
-      # Отчёт публикуется в папку history для сохранения истории между прогонами
+      # Отчёт сохраняется в корень ветки gh-pages, история — в папку history
+      # if: always() — публикуем отчёт даже если тесты упали
       - name: Deploy Allure report to GitHub Pages
+        if: always()
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           token: ${{ secrets.CI_TOKEN }}
@@ -112,7 +116,7 @@ jobs:
           target-folder: history
           clean: false
 
-      # Шаг 8 — Загрузка артефакта с сырыми результатами Allure (на случай, если нужен для отладки)
+      # Шаг 8 — Загрузка артефакта с сырыми результатами Allure (для отладки)
       - name: Upload Allure results artifact
         if: always()
         uses: actions/upload-artifact@v4
